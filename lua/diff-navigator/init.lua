@@ -4,6 +4,7 @@ local M = {}
 M.config = {
   highlight_duration = 1500,
   remote_branch = "origin/main",
+  use_gh_cli = true, -- Use gh pr diff when available
   keymaps = {
     local_next = "<leader>gj",
     local_prev = "<leader>gk",
@@ -31,6 +32,27 @@ local function get_git_root()
     return nil
   end
   return vim.trim(result)
+end
+
+local function is_gh_available()
+  vim.fn.system("gh auth status 2>/dev/null")
+  return vim.v.shell_error == 0
+end
+
+local function is_github_remote()
+  local result = vim.fn.system("git remote get-url origin 2>/dev/null")
+  if vim.v.shell_error ~= 0 then
+    return false
+  end
+  return result:match("github%.com") ~= nil
+end
+
+local function run_gh_pr_diff()
+  local result = vim.fn.system({ "gh", "pr", "diff", "--patch" })
+  if vim.v.shell_error ~= 0 then
+    return nil, "gh pr diff failed"
+  end
+  return result, nil
 end
 
 local function run_git_diff(diff_target)
@@ -101,8 +123,20 @@ end
 -- ==========================================
 
 local function refresh_cache(is_remote)
-  local diff_target = is_remote and M.config.remote_branch or nil
-  local output, err = run_git_diff(diff_target)
+  local output, err
+
+  if is_remote then
+    -- Try gh pr diff first if enabled and available
+    if M.config.use_gh_cli and is_gh_available() and is_github_remote() then
+      output, err = run_gh_pr_diff()
+    end
+    -- Fall back to git diff
+    if not output then
+      output, err = run_git_diff(M.config.remote_branch)
+    end
+  else
+    output, err = run_git_diff(nil)
+  end
 
   if err or not output then
     return false, err or "Unknown error"
