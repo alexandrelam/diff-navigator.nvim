@@ -5,6 +5,7 @@ M.config = {
   highlight_duration = 1500,
   remote_branch = "origin/main",
   use_gh_cli = true, -- Use gh pr diff when available
+  cache_ttl = 30, -- Seconds before cache expires (0 = always refresh)
   keymaps = {
     local_next = "<leader>gj",
     local_prev = "<leader>gk",
@@ -19,6 +20,10 @@ local state = {
   remote_hunks = {},
   local_index = 0,
   remote_index = 0,
+  local_cache_time = 0,
+  remote_cache_time = 0,
+  local_refreshing = false,
+  remote_refreshing = false,
   ns_id = nil,
 }
 
@@ -80,6 +85,9 @@ local function run_git_diff(diff_target)
   return result, nil
 end
 
+-- Forward declaration for async refresh (parse_diff defined later)
+local refresh_cache_async
+
 -- ==========================================
 -- DIFF PARSING
 -- ==========================================
@@ -127,11 +135,79 @@ local function parse_diff(diff_output)
   return hunks
 end
 
+-- Async refresh implementation (runs in background, updates state when done)
+refresh_cache_async = function(is_remote)
+  local refreshing_key = is_remote and "remote_refreshing" or "local_refreshing"
+
+  -- Don't start another refresh if one is in progress
+  if state[refreshing_key] then
+    return
+  end
+  state[refreshing_key] = true
+
+  -- Build command based on config
+  local cmd
+  if is_remote and M.config.use_gh_cli then
+    -- Try gh first, fall back to git diff
+    cmd = "gh pr diff --patch 2>/dev/null || git diff --no-color --unified=0 " .. M.config.remote_branch
+  elseif is_remote then
+    cmd = "git diff --no-color --unified=0 " .. M.config.remote_branch
+  else
+    cmd = "git diff --no-color --unified=0"
+  end
+
+  local output_chunks = {}
+
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      if data then
+        output_chunks = data
+      end
+    end,
+    on_exit = function(_, exit_code)
+      state[refreshing_key] = false
+      if exit_code == 0 then
+        local output = table.concat(output_chunks, "\n")
+        local hunks = parse_diff(output)
+        local now = vim.loop.now() / 1000
+        if is_remote then
+          state.remote_hunks = hunks
+          state.remote_cache_time = now
+        else
+          state.local_hunks = hunks
+          state.local_cache_time = now
+        end
+      end
+    end,
+  })
+end
+
 -- ==========================================
 -- CACHE MANAGEMENT
 -- ==========================================
 
-local function refresh_cache(is_remote)
+local function refresh_cache(is_remote, force)
+  local now = vim.loop.now() / 1000 -- Current time in seconds
+  local cache_time_key = is_remote and "remote_cache_time" or "local_cache_time"
+  local hunks_key = is_remote and "remote_hunks" or "local_hunks"
+
+  local has_cache = #state[hunks_key] > 0
+  local age = now - state[cache_time_key]
+  local is_stale = M.config.cache_ttl > 0 and age >= M.config.cache_ttl
+
+  -- Fresh cache: return immediately
+  if not force and has_cache and not is_stale then
+    return true, nil
+  end
+
+  -- Stale cache with data: return stale + trigger background refresh
+  if not force and has_cache and is_stale then
+    refresh_cache_async(is_remote)
+    return true, nil -- Use stale data, refresh happens in background
+  end
+
+  -- No cache or forced: must fetch synchronously (blocking)
   local output, err
 
   if is_remote then
@@ -155,8 +231,10 @@ local function refresh_cache(is_remote)
 
   if is_remote then
     state.remote_hunks = hunks
+    state.remote_cache_time = now
   else
     state.local_hunks = hunks
+    state.local_cache_time = now
   end
 
   return true, nil
@@ -272,6 +350,25 @@ for _, cmd in ipairs(NAVIGATION_COMMANDS) do
   end
 end
 
+-- Manual cache refresh functions
+function M.refresh_remote()
+  local success, err = refresh_cache(true, true)
+  if success then
+    vim.notify("Remote diff cache refreshed (" .. #state.remote_hunks .. " hunks)", vim.log.levels.INFO)
+  else
+    vim.notify("Failed to refresh remote cache: " .. (err or ""), vim.log.levels.ERROR)
+  end
+end
+
+function M.refresh_local()
+  local success, err = refresh_cache(false, true)
+  if success then
+    vim.notify("Local diff cache refreshed (" .. #state.local_hunks .. " hunks)", vim.log.levels.INFO)
+  else
+    vim.notify("Failed to refresh local cache: " .. (err or ""), vim.log.levels.ERROR)
+  end
+end
+
 -- ==========================================
 -- SETUP
 -- ==========================================
@@ -283,6 +380,10 @@ function M.setup(opts)
   for _, cmd in ipairs(NAVIGATION_COMMANDS) do
     vim.api.nvim_create_user_command(cmd.command, M[cmd.name], {})
   end
+
+  -- Create refresh commands
+  vim.api.nvim_create_user_command("DiffNavRefreshRemote", M.refresh_remote, {})
+  vim.api.nvim_create_user_command("DiffNavRefreshLocal", M.refresh_local, {})
 
   -- Set up keymaps from NAVIGATION_COMMANDS (unless disabled)
   if M.config.keymaps then
