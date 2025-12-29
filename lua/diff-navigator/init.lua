@@ -22,6 +22,14 @@ local state = {
   ns_id = nil,
 }
 
+-- Navigation command definitions (single source of truth)
+local NAVIGATION_COMMANDS = {
+  { name = "local_next", command = "DiffNavLocalNext", direction = 1, is_remote = false, desc = "Local diff: next hunk" },
+  { name = "local_prev", command = "DiffNavLocalPrev", direction = -1, is_remote = false, desc = "Local diff: previous hunk" },
+  { name = "remote_next", command = "DiffNavRemoteNext", direction = 1, is_remote = true, desc = "Remote diff: next hunk" },
+  { name = "remote_prev", command = "DiffNavRemotePrev", direction = -1, is_remote = true, desc = "Remote diff: previous hunk" },
+}
+
 -- ==========================================
 -- UTILITY FUNCTIONS
 -- ==========================================
@@ -29,9 +37,13 @@ local state = {
 local function get_git_root()
   local result = vim.fn.system("git rev-parse --show-toplevel 2>/dev/null")
   if vim.v.shell_error ~= 0 then
-    return nil
+    return nil, "Not in a git repository"
   end
-  return vim.trim(result)
+  return vim.trim(result), nil
+end
+
+local function clamp_line(line, max_line)
+  return math.max(1, math.min(line, max_line))
 end
 
 local function is_gh_available()
@@ -96,12 +108,9 @@ local function parse_diff(diff_output)
         hunk_type = "delete"
         target_line = old_start
         end_line = old_start
-      elseif old_count == 0 then
-        hunk_type = "add"
-        target_line = new_start
-        end_line = new_start + new_count - 1
       else
-        hunk_type = "change"
+        -- Both "add" (old_count == 0) and "change" use same line calculation
+        hunk_type = old_count == 0 and "add" or "change"
         target_line = new_start
         end_line = new_start + new_count - 1
       end
@@ -167,6 +176,7 @@ local function highlight_region(bufnr, start_line, end_line)
   local hl_group = "DiffAdd"
 
   for lnum = start_line, end_line do
+    -- Silently ignore highlight errors (e.g., invalid line numbers at buffer edges)
     pcall(vim.api.nvim_buf_add_highlight, bufnr, state.ns_id, hl_group, lnum - 1, 0, -1)
   end
 
@@ -182,9 +192,9 @@ end
 -- ==========================================
 
 local function jump_to_hunk(hunk)
-  local git_root = get_git_root()
+  local git_root, git_err = get_git_root()
   if not git_root then
-    vim.notify("Not in a git repository", vim.log.levels.ERROR)
+    vim.notify(git_err, vim.log.levels.ERROR)
     return
   end
 
@@ -200,14 +210,13 @@ local function jump_to_hunk(hunk)
     vim.cmd("edit " .. vim.fn.fnameescape(filepath))
   end
 
-  local target_line = math.max(1, hunk.line)
   local line_count = vim.api.nvim_buf_line_count(0)
-  target_line = math.min(target_line, line_count)
+  local target_line = clamp_line(hunk.line, line_count)
 
   vim.api.nvim_win_set_cursor(0, { target_line, 0 })
   vim.cmd("normal! zz")
 
-  local end_line = math.min(hunk.end_line, line_count)
+  local end_line = clamp_line(hunk.end_line, line_count)
   highlight_region(0, target_line, end_line)
 end
 
@@ -256,20 +265,11 @@ end
 -- PUBLIC API
 -- ==========================================
 
-function M.local_next()
-  navigate(1, false)
-end
-
-function M.local_prev()
-  navigate(-1, false)
-end
-
-function M.remote_next()
-  navigate(1, true)
-end
-
-function M.remote_prev()
-  navigate(-1, true)
+-- Generate public API functions from NAVIGATION_COMMANDS
+for _, cmd in ipairs(NAVIGATION_COMMANDS) do
+  M[cmd.name] = function()
+    navigate(cmd.direction, cmd.is_remote)
+  end
 end
 
 -- ==========================================
@@ -279,26 +279,18 @@ end
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 
-  -- Create user commands
-  vim.api.nvim_create_user_command("DiffNavLocalNext", M.local_next, {})
-  vim.api.nvim_create_user_command("DiffNavLocalPrev", M.local_prev, {})
-  vim.api.nvim_create_user_command("DiffNavRemoteNext", M.remote_next, {})
-  vim.api.nvim_create_user_command("DiffNavRemotePrev", M.remote_prev, {})
+  -- Create user commands from NAVIGATION_COMMANDS
+  for _, cmd in ipairs(NAVIGATION_COMMANDS) do
+    vim.api.nvim_create_user_command(cmd.command, M[cmd.name], {})
+  end
 
-  -- Set up keymaps (unless disabled)
+  -- Set up keymaps from NAVIGATION_COMMANDS (unless disabled)
   if M.config.keymaps then
-    local keymaps = M.config.keymaps
-    if keymaps.local_next then
-      vim.keymap.set("n", keymaps.local_next, M.local_next, { desc = "Local diff: next hunk" })
-    end
-    if keymaps.local_prev then
-      vim.keymap.set("n", keymaps.local_prev, M.local_prev, { desc = "Local diff: previous hunk" })
-    end
-    if keymaps.remote_next then
-      vim.keymap.set("n", keymaps.remote_next, M.remote_next, { desc = "Remote diff: next hunk" })
-    end
-    if keymaps.remote_prev then
-      vim.keymap.set("n", keymaps.remote_prev, M.remote_prev, { desc = "Remote diff: previous hunk" })
+    for _, cmd in ipairs(NAVIGATION_COMMANDS) do
+      local keymap = M.config.keymaps[cmd.name]
+      if keymap then
+        vim.keymap.set("n", keymap, M[cmd.name], { desc = cmd.desc })
+      end
     end
   end
 end
