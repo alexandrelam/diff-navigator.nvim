@@ -97,6 +97,25 @@ vim.keymap.set("n", "]d", require("diff-navigator").local_next)
 vim.keymap.set("n", "[d", require("diff-navigator").local_prev)
 ```
 
+### Overriding Keymaps in LazyVim
+
+If you're using LazyVim and have conflicting keybindings, use lazy.nvim's `keys` spec to ensure your keymaps take precedence:
+
+```lua
+{
+  "alexandrelam/diff-navigator.nvim",
+  keys = {
+    { "<leader>gl", function() require("diff-navigator").remote_next() end, desc = "Remote diff: next hunk" },
+    { "<leader>gh", function() require("diff-navigator").remote_prev() end, desc = "Remote diff: prev hunk" },
+    { "<leader>gj", function() require("diff-navigator").local_next() end, desc = "Local diff: next hunk" },
+    { "<leader>gk", function() require("diff-navigator").local_prev() end, desc = "Local diff: prev hunk" },
+  },
+  opts = {
+    keymaps = false, -- Disable built-in keymaps since we're defining them above
+  },
+}
+```
+
 ## Commands
 
 | Command | Description |
