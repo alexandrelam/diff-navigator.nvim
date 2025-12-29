@@ -6,6 +6,7 @@ A Neovim plugin for navigating git diff hunks. Jump between local (unstaged) cha
 
 - Navigate through **local diff hunks** (unstaged changes)
 - Navigate through **remote diff hunks** (changes compared to a remote branch)
+- **GitHub CLI integration** - uses `gh pr diff` for PR branches when available
 - Automatic highlighting of the current hunk
 - Wraps around when reaching the end/beginning of hunks
 - Configurable keymaps and highlight duration
@@ -53,6 +54,9 @@ require("diff-navigator").setup({
   -- Remote branch for remote diff comparison
   remote_branch = "origin/main",
 
+  -- Use GitHub CLI (gh pr diff) when available
+  use_gh_cli = true,
+
   -- Keymaps (set to false to disable all default keymaps)
   keymaps = {
     local_next = "<leader>gj",
@@ -69,6 +73,7 @@ require("diff-navigator").setup({
 |--------|------|---------|-------------|
 | `highlight_duration` | number | `1500` | Duration in ms to highlight the current hunk |
 | `remote_branch` | string | `"origin/main"` | Remote branch for comparison |
+| `use_gh_cli` | boolean | `true` | Use `gh pr diff` for remote diffs when available |
 | `keymaps` | table/false | see below | Keymap configuration or `false` to disable |
 
 ### Default Keymaps
@@ -113,6 +118,16 @@ dn.local_prev()   -- Navigate to previous local hunk
 dn.remote_next()  -- Navigate to next remote hunk
 dn.remote_prev()  -- Navigate to previous remote hunk
 ```
+
+## GitHub CLI Integration
+
+When `use_gh_cli` is enabled (default), the plugin will use `gh pr diff` for remote diffs when:
+
+- The [GitHub CLI](https://cli.github.com/) is installed and authenticated (`gh auth status`)
+- The repository's origin is a GitHub remote
+- You're on a branch with an open pull request
+
+If any of these conditions are not met, it automatically falls back to `git diff`.
 
 ## License
 
