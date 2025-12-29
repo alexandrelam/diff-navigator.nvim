@@ -145,6 +145,9 @@ refresh_cache_async = function(is_remote)
   end
   state[refreshing_key] = true
 
+  local diff_type = is_remote and "remote" or "local"
+  vim.notify("Refreshing " .. diff_type .. " diff...", vim.log.levels.INFO)
+
   -- Build command based on config
   local cmd
   if is_remote and M.config.use_gh_cli then
@@ -208,6 +211,9 @@ local function refresh_cache(is_remote, force)
   end
 
   -- No cache or forced: must fetch synchronously (blocking)
+  local diff_type = is_remote and "remote" or "local"
+  vim.notify("Fetching " .. diff_type .. " diff...", vim.log.levels.INFO)
+
   local output, err
 
   if is_remote then
